@@ -1,0 +1,59 @@
+name: Auto Release on Push
+on:
+  push:
+    branches: [main]
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - uses: android-actions/setup-android@v3
+      - uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+      - id: check
+        run: |
+          if git rev-parse "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+      - if: steps.check.outputs.exists == 'false'
+        run: |
+          npx expo prebuild --platform android --clean
+          cd android && ./gradlew assembleRelease
+      - id: apk
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          APK=$(find . -name "*.apk" -type f | head -1)
+          NEW_NAME="milk-filter-${{ steps.version.outputs.version }}.apk"
+          cp "$APK" "$NEW_NAME"
+          echo "apk=$NEW_NAME" >> $GITHUB_OUTPUT
+      - uses: softprops/action-gh-release@v1
+        if: steps.check.outputs.exists == 'false'
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Milk Filter ${{ steps.version.outputs.version }}
+          files: ${{ steps.apk.outputs.apk }}
+          body: "Milk Filter v${{ steps.version.outputs.version }}\nAndroid 12+"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - if: steps.check.outputs.exists == 'false'
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git tag ${{ steps.version.outputs.tag }}
+          git push origin ${{ steps.version.outputs.tag }}
